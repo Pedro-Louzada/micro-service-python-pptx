@@ -12,12 +12,20 @@ class PLANS(Enum):
 class AdequatePlanPayload(TypedDict):
     adequatePlan: PLANS
 
+class Client(TypedDict):
+    name: str
+    briefing: AdequatePlanPayload
+
+class ServiceData(TypedDict):
+    tipoProposta: str
+    cliente: Client
+
 class SustentationProposalGenerator:
 
-    def __init__(self, template_path):
+    def __init__(self, template_path: str):
         self.prs = Presentation(template_path)
 
-    async def generate(self, data, logo):
+    async def generate(self, data: ServiceData, logo):
         await self._update_logo(logo)
         self._handle_sustentation_plan(data["cliente"]["briefing"])
 

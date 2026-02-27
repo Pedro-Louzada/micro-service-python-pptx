@@ -2,7 +2,7 @@ from fastapi import APIRouter, UploadFile, File, Form
 from services.squad_generator import SquadProposalGenerator
 from services.sustentation_generator import SustentationProposalGenerator
 from services.agent_and_sustentation_generator import AgentAndSustentationProposalGenerator
-from services.graph_service import GraphService
+from services.construction_generator import ConstructionProposalGenerator
 import json
 import logging
 
@@ -37,10 +37,10 @@ async def generate_proposal(
                 generator = AgentAndSustentationProposalGenerator("templates/ai-agent-e-sustentacao.pptx")
                 file_path = await generator.generate(data, logo)
                 return {"file": file_path}
-
-            case "TESTE":
-                generator = GraphService()
-                file_path = generator.generate(data)
+            
+            case "CONSTRUCAO":
+                generator = ConstructionProposalGenerator("templates/construcao.pptx")
+                file_path = await generator.generate(data, logo)
                 return {"file": file_path}
             
             case _:

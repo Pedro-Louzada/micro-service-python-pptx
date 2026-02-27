@@ -78,9 +78,9 @@ class SquadProposalGenerator:
                             if shape.has_text_frame:
                                 for paragraph in shape.text_frame.paragraphs:
                                     for run in paragraph.runs:
-                                        if "<HRS_ATUACAO>" in run.text:
+                                        if "<HRS>" in run.text:
                                             run.text = run.text.replace(
-                                                "<HRS_ATUACAO>",
+                                                "<HRS>",
                                                 f"{percentual}H"
                                             )
 

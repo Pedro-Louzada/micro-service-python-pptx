@@ -11,7 +11,7 @@ from pptx.enum.shapes import MSO_SHAPE
 from pptx.oxml.xmlchemy import OxmlElement
 import logging
 import io
-import re
+import math
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +22,7 @@ class PLANS(Enum):
     DIAMOND_PLAN = "diamond"
 
 class Timeline(TypedDict):
-    flowDrawing: str
+    flowDrawing: float
     drawingHomologation: str
     development: str
     qaHomologation: str
@@ -163,10 +163,9 @@ class AgentAndSustentationProposalGenerator:
         slide_id_list.insert(original_index + 1, new_sldId)
 
         return new_slide
-    
+
     def _handle_project_scope(self, briefing):
         logger.info(f"Iniciando a atualização dos slides de escopo...")
-
 
         main_goal = briefing.get("mainGoal")
         briefing_details = briefing.get("briefingDetails")
@@ -244,181 +243,136 @@ class AgentAndSustentationProposalGenerator:
                         space_p = text_frame.add_paragraph()
                         space_p.text = ""
 
-    def week_extract(self, texto):
-        """Extrai o número de semanas de strings como '2 semanas' ou '1 semana'"""
-        if not texto: return 0
-        match = re.search(r'(\d+)', str(texto))
-        return int(match.group(1)) if match else 0
+    def _remove_old_bars(self, slide):
+        shapes_to_remove = []
 
-    def format_transparence_table(self, table, etapas):
+        for shape in slide.shapes:
+            if shape.name.startswith("BAR_"):
+                shapes_to_remove.append(shape)
 
-        def set_cell_border(cell, color_str="DCDCDC"):
-            tc = cell._tc
-            tcPr = tc.get_or_add_tcPr()
-            
-            for side in ['lnL', 'lnR', 'lnT', 'lnB']:
-                ln = OxmlElement(f'a:{side}')
-                ln.set('w', '6350')  # 0.5pt
-                ln.set('cap', 'flat')
-                ln.set('cmpd', 'sng')
-                ln.set('algn', 'ctr')
-
-                srgbClr = OxmlElement('a:srgbClr')
-                srgbClr.set('val', color_str)
-                ln.append(srgbClr)
-
-                prstDash = OxmlElement('a:prstDash')
-                prstDash.set('val', 'solid')
-                ln.append(prstDash)
-
-                tcPr.append(ln)
-
-        for row_idx, row in enumerate(table.rows):
-            for col_idx, cell in enumerate(row.cells):
-
-                # 🔥 Fundo branco explícito (não background)
-                cell.fill.solid()
-                cell.fill.fore_color.rgb = RGBColor(255, 255, 255)
-
-                set_cell_border(cell, "DCDCDC")
-
-                # Primeira coluna com cor da etapa
-                if col_idx == 0 and row_idx > 0:
-                    cor_etapa = etapas[row_idx-1][2]
-                    p = cell.text_frame.paragraphs[0]
-                    p.font.name = 'Roboto'
-                    p.font.size = Pt(10)
-                    p.font.bold = True
-                    p.font.color.rgb = cor_etapa
-    
-    def add_personalized_bar(self, slide, table_shape, row_idx, col_idx, cor_rgb):
-        """
-        Calcula a posição usando o shape da tabela (GraphicFrame) para evitar erros de atributo.
-        """
-        table = table_shape.table
-        
-        # 1. Posição inicial baseada no Shape que contém a tabela
-        left_pos = table_shape.left 
-        top_pos = table_shape.top
-            
-        # 2. Somar larguras das colunas anteriores
-        for c in range(col_idx):
-            left_pos += table.columns[c].width
-            
-        # 3. Somar alturas das linhas anteriores
-        for r in range(row_idx):
-            top_pos += table.rows[r].height
-            
-        # 4. Dimensões da célula alvo
-        cell_width = table.columns[col_idx].width
-        cell_height = table.rows[row_idx].height
-        
-        # 5. Padding (Ajuste conforme o gosto visual)
-        padding_h = Pt(8) # Padding horizontal
-        padding_v = Pt(6) # Padding vertical
-        
-        bar_left = left_pos + padding_h
-        bar_top = top_pos + padding_v
-        bar_width = cell_width - (padding_h * 2)
-        bar_height = cell_height - (padding_v * 2)
-        
-        # 6. Adicionar o retângulo arredondado
-        rect = slide.shapes.add_shape(
-            MSO_SHAPE.ROUNDED_RECTANGLE, bar_left, bar_top, bar_width, bar_height
-        )
-        
-        # Estilização final
-        rect.fill.solid()
-        rect.fill.fore_color.rgb = cor_rgb
-        rect.line.fill.background() # Remove contorno
-        rect.adjustments[0] = 0.2    # Suaviza o arredondamento
+        for shape in shapes_to_remove:
+            sp = shape._element
+            sp.getparent().remove(sp)
 
     def _handle_project_timeline(self, briefing: AdequatePlanPayload):
-        logger.info(f"Iniciando a construção do gráfico de timeline...")
+        logger.info("Construindo timeline estilo Gantt...")
 
         timeline_data = briefing["timeLine"]
 
-        graph_shape_name = 'GRAPH_SHAPE'
-
         etapas = [
-            ("flowDrawing", "DESENHO DE FLUXO", RGBColor(31, 73, 125)),
-            ("drawingHomologation", "HOMOLOGAÇÃO DO DESENHO", RGBColor(255, 51, 153)),
-            ("development", "DESENVOLVIMENTO DO FLUXO", RGBColor(128, 110, 180)),
-            ("qaHomologation", "TESTES INTERNOS (QAs)", RGBColor(0, 0, 255)),
-            ("clientHomologation", "HOMOLOGAÇÃO CLIENTE", RGBColor(0, 176, 240))
+            ("flowDrawing", RGBColor(31, 73, 125)),
+            ("drawingHomologation", RGBColor(255, 51, 153)),
+            ("development", RGBColor(128, 110, 180)),
+            ("qaHomologation", RGBColor(0, 0, 255)),
+            ("clientHomologation", RGBColor(0, 176, 240)),
         ]
+
+        # localizar tabela
+        timeline_slide = None
+        table_shape = None
 
         for slide in self.prs.slides:
             for shape in slide.shapes:
-                if (shape.name == graph_shape_name):
-                    total_semanas = sum(self.week_extract(timeline_data.get(k, 0)) for k, _, _ in etapas)
-                    num_colunas = max(total_semanas, 6) + 1 
+                if shape.name == "GRAPH_SHAPE":
+                    timeline_slide = slide
+                    table_shape = shape
+                    break
+            if timeline_slide:
+                break
 
-                    rows, cols = len(etapas) + 1, num_colunas
-                    
-                    left = shape.left
-                    top = shape.top
-                    width = shape.width
-                    height = shape.height
+        if not timeline_slide:
+            logger.warning("GRAPH_SHAPE não encontrada.")
+            return
 
-                    graphic_frame = slide.shapes.add_table(rows, cols, left, top, width, height)
-                    table = graphic_frame.table
-                    table.style = "TableGrid"
+        table = table_shape.table
 
-                    sp = shape._element
-                    sp.getparent().remove(sp)
+        # remover barras antigas
+        self._remove_old_bars(timeline_slide)
 
-                    table.first_row = False
-                    table.first_col = False
-                    table.last_row = False
-                    table.last_col = False
-                    table.horz_banding = False
-                    table.vert_banding = False
+        # total semanas (considerando fração)
+        total_semanas = sum(
+            float(timeline_data.get(k, 0) or 0) for k, _ in etapas
+        )
 
-                    tbl = table._tbl
-                    tblPr = tbl.tblPr
-                    tblStyle = tblPr.find('{http://schemas.openxmlformats.org/drawingml/2006/main}tblStyle')
+        total_semanas = max(math.ceil(total_semanas), 6)
 
-                    if tblStyle is not None:
-                        tblPr.remove(tblStyle)
-                                                            
-                    # Limpar fundo e bordas antes de escrever
-                    self.format_transparence_table(table, etapas)
-                    
-                    # 3. Re-inserir Cabeçalhos (SEM 1, SEM 2...)
-                    for i in range(1, cols):
-                        cell = table.cell(0, i)
-                        cell.text = f"SEM {i}"
-                        p = cell.text_frame.paragraphs[0]
-                        p.alignment = PP_ALIGN.CENTER
-                        # Forçar visibilidade e fonte
-                        run = p.runs[0]
-                        run.font.name = 'Roboto'
-                        run.font.size = Pt(10)
-                        run.font.bold = True
-                        run.font.color.rgb = RGBColor(120, 120, 120) # Cinza discreto para os cabeçalhos
+        # cabeçalho
+        for col in range(1, total_semanas + 1):
+            cell = table.cell(0, col)
+            cell.text = f"SEM {col}"
 
-                    # 4. Loop de Preenchimento das Etapas
-                    coluna_atual = 1
-                    for row_idx, (chave_json, nome_etapa, cor) in enumerate(etapas, start=1):
-                        cell_nome = table.cell(row_idx, 0)
-                        cell_nome.text = nome_etapa
-                        
-                        # Formatação Roboto para as nomenclaturas laterais
-                        p = cell_nome.text_frame.paragraphs[0]
-                        p.alignment = PP_ALIGN.LEFT
-                        run = p.runs[0]
-                        run.font.name = 'Roboto'
-                        run.font.size = Pt(10)
-                        run.font.bold = True
-                        run.font.color.rgb = cor # Cor correspondente à etapa
+            p = cell.text_frame.paragraphs[0]
+            p.alignment = PP_ALIGN.CENTER
 
-                        duracao = self.week_extract(timeline_data.get(chave_json, 0))
-                        
-                        for _ in range(duracao):
-                            if coluna_atual < cols:
-                                self.add_personalized_bar(slide, graphic_frame, row_idx, coluna_atual, cor)
-                                coluna_atual += 1
+            run = p.runs[0]
+            run.font.name = "Roboto"
+            run.font.size = Pt(16)
+            run.font.italic = True
+            run.font.color.rgb = RGBColor(120, 120, 120)
+
+        coluna_atual = 1.0  # agora é float
+
+        for row_idx, (key, cor) in enumerate(etapas, start=1):
+
+            duracao = float(timeline_data.get(key, 0) or 0)
+
+            if duracao <= 0:
+                continue
+
+            # posição base
+            left = table_shape.left
+            top = table_shape.top
+
+            # deslocamento horizontal (parte inteira)
+            col_inteira = int(coluna_atual)
+
+            for c in range(col_inteira):
+                left += table.columns[c].width
+
+            # parte fracionada inicial
+            fracao_inicio = coluna_atual - col_inteira
+            if fracao_inicio > 0:
+                left += table.columns[col_inteira].width * fracao_inicio
+
+            # deslocamento vertical
+            for r in range(row_idx):
+                top += table.rows[r].height
+
+            # largura considerando fração
+            largura_total = 0
+
+            parte_inteira = int(duracao)
+            fracao = duracao - parte_inteira
+
+            # somar colunas inteiras
+            for i in range(parte_inteira):
+                largura_total += table.columns[col_inteira + i].width
+
+            # parte fracionada final
+            if fracao > 0:
+                largura_total += table.columns[col_inteira + parte_inteira].width * fracao
+
+            altura = table.rows[row_idx].height
+
+            padding_h = Pt(6)
+            padding_v = Pt(4)
+
+            barra = timeline_slide.shapes.add_shape(
+                MSO_SHAPE.ROUNDED_RECTANGLE,
+                left + padding_h,
+                top + padding_v,
+                largura_total - (padding_h * 2),
+                altura - (padding_v * 2),
+            )
+
+            barra.name = f"BAR_{key}"
+
+            barra.fill.solid()
+            barra.fill.fore_color.rgb = cor
+            barra.line.fill.background()
+            barra.adjustments[0] = 0.3
+
+            coluna_atual += duracao
                 
 
     def _handle_sustentation_plan(self, briefing: AdequatePlanPayload):
